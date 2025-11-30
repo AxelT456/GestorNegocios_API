@@ -2,7 +2,10 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import Categoria, Producto, MovimientoFinanciero, Venta, DetalleVenta
 
-# --- AUTH SERIALIZERS ---
+# =========================================================
+# 1. AUTH SERIALIZERS
+# =========================================================
+
 class RegistroUsuarioSerializer(serializers.ModelSerializer):
     password_confirm = serializers.CharField(write_only=True)
 
@@ -25,7 +28,11 @@ class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()
 
-# --- MODEL SERIALIZERS ---
+
+# =========================================================
+# 2. CATALOGOS (Categorias y Productos)
+# =========================================================
+
 class CategoriaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Categoria
@@ -37,3 +44,34 @@ class ProductoSerializer(serializers.ModelSerializer):
         model = Producto
         read_only_fields = ('usuario',)
         fields = '__all__'
+
+
+# =========================================================
+# 3. FINANZAS (ESTO ES LO QUE TE FALTABA)
+# =========================================================
+
+class MovimientoFinancieroSerializer(serializers.ModelSerializer):
+    # Agregamos el nombre de la categoría para leerlo fácil en el frontend
+    categoria_nombre = serializers.ReadOnlyField(source='categoria.nombre')
+
+    class Meta:
+        model = MovimientoFinanciero
+        # Usuario y fecha se llenan solos, no los pedimos
+        read_only_fields = ('usuario', 'fecha')
+        fields = ['id', 'monto', 'descripcion', 'es_gasto', 'fecha', 'categoria', 'categoria_nombre']
+
+class DetalleVentaSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.ReadOnlyField(source='producto.nombre')
+
+    class Meta:
+        model = DetalleVenta
+        fields = ['id', 'producto', 'producto_nombre', 'cantidad', 'precio_unitario', 'subtotal']
+
+class VentaSerializer(serializers.ModelSerializer):
+    # Incluimos los detalles anidados (Nested Serializer)
+    detalles = DetalleVentaSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Venta
+        read_only_fields = ('usuario', 'fecha', 'total')
+        fields = ['id', 'total', 'metodo_pago', 'fecha', 'detalles']
