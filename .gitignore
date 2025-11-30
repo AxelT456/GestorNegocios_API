@@ -1,0 +1,42 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Entornos Virtuales (¡Muy Importante!) ---
+# Esto evita subir las librerías pesadas. Solo subimos el código.
+venv/
+env/
+.env
+.venv/
+
+# --- Django ---
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# --- Archivos Multimedia (Imágenes subidas por usuarios) ---
+# Generalmente no se suben al repo, pero mantenemos la carpeta vacía.
+media/
+!media/.gitkeep
+
+# --- Archivos Estáticos (generados por collectstatic) ---
+staticfiles/
+
+# --- Migraciones ---
+# OJO: SÍ subimos las migraciones, pero NO los archivos compilados dentro de ellas.
+*/migrations/*.pyc
+*/migrations/__pycache__/
+
+# --- VS Code / Editores ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- Windows / OS ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
