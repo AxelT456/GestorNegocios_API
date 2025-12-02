@@ -47,7 +47,7 @@ class ProductoSerializer(serializers.ModelSerializer):
 
 
 # =========================================================
-# 3. FINANZAS (ESTO ES LO QUE TE FALTABA)
+# 3. FINANZAS 
 # =========================================================
 
 class MovimientoFinancieroSerializer(serializers.ModelSerializer):

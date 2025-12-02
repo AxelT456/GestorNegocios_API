@@ -1,27 +1,55 @@
-from rest_framework.views import APIView
+from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from django.db.models import ProtectedError
+from django.db import transaction 
 
-from django.db import transaction # Importante para que la venta sea segura
-from .models import MovimientoFinanciero, Venta, DetalleVenta
-from .serializers import MovimientoFinancieroSerializer, VentaSerializer
+# --- IMPORTACIONES PARA EL FIX DE FECHAS ---
+from django.utils.dateparse import parse_date
+from django.utils.timezone import make_aware
+from datetime import datetime, time
+# -------------------------------------------
 
-from .models import Categoria, Producto
+from .models import Categoria, Producto, MovimientoFinanciero, Venta, DetalleVenta
+# CORRECCIÓN AQUÍ: Quitamos 'CrearVentaSerializer' de la lista
 from .serializers import (
     RegistroUsuarioSerializer, LoginSerializer, 
-    CategoriaSerializer, ProductoSerializer
+    CategoriaSerializer, ProductoSerializer,
+    MovimientoFinancieroSerializer, VentaSerializer
 )
 
 # =========================================================
-# 1. AUTENTICACIÓN (Registro, Login, Logout)
+# HELPER: FUNCIÓN PARA FILTRAR FECHAS (EL FIX DE ZONA HORARIA)
+# =========================================================
+def filtrar_por_fechas(queryset, start_date, end_date):
+    if start_date and end_date:
+        try:
+            # 1. Convertir texto a objetos fecha
+            f_inicio = parse_date(start_date)
+            f_fin = parse_date(end_date)
+            
+            # 2. Convertir a DateTime con Zona Horaria (00:00:00 a 23:59:59)
+            # make_aware le pone la zona horaria definida en settings.py
+            inicio_dt = make_aware(datetime.combine(f_inicio, time.min))
+            fin_dt = make_aware(datetime.combine(f_fin, time.max))
+            
+            # 3. Filtrar usando rango exacto
+            return queryset.filter(fecha__range=(inicio_dt, fin_dt))
+        except Exception as e:
+            print("Error filtrando fechas:", e)
+            return queryset
+    return queryset
+
+
+# =========================================================
+# 1. AUTENTICACIÓN
 # =========================================================
 
 class RegistroView(APIView):
-    permission_classes = [permissions.AllowAny] # Público
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = RegistroUsuarioSerializer(data=request.data)
@@ -36,7 +64,7 @@ class RegistroView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LoginView(APIView):
-    permission_classes = [permissions.AllowAny] # Público
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -56,11 +84,13 @@ class LoginView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):
-    permission_classes = [permissions.IsAuthenticated] # Privado
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        # Borra el token del usuario actual
-        request.user.auth_token.delete()
+        try:
+            request.user.auth_token.delete()
+        except:
+            pass
         return Response(status=status.HTTP_200_OK)
 
 
@@ -72,7 +102,6 @@ class CategoriaListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # SOLO devuelve categorías creadas por el usuario logueado
         categorias = Categoria.objects.filter(usuario=request.user)
         serializer = CategoriaSerializer(categorias, many=True)
         return Response(serializer.data)
@@ -80,7 +109,6 @@ class CategoriaListCreateView(APIView):
     def post(self, request):
         serializer = CategoriaSerializer(data=request.data)
         if serializer.is_valid():
-            # Asigna automáticamente el usuario logueado
             serializer.save(usuario=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -91,14 +119,13 @@ class CategoriaDetailView(APIView):
     def get_object(self, pk, usuario):
         obj = get_object_or_404(Categoria, pk=pk)
         if obj.usuario != usuario:
-            return None # No es tuyo
+            return None
         return obj
 
     def put(self, request, pk):
         categoria = self.get_object(pk, request.user)
         if not categoria:
             return Response(status=status.HTTP_403_FORBIDDEN)
-            
         serializer = CategoriaSerializer(categoria, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -152,7 +179,6 @@ class ProductoDetailView(APIView):
         producto = self.get_object(pk, request.user)
         if not producto:
             return Response(status=status.HTTP_403_FORBIDDEN)
-            
         serializer = ProductoSerializer(producto, data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -163,26 +189,30 @@ class ProductoDetailView(APIView):
         producto = self.get_object(pk, request.user)
         if not producto:
             return Response(status=status.HTTP_403_FORBIDDEN)
-        
         try:
             producto.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except ProtectedError:
-            return Response(
-                {"error": "No puedes eliminar este producto porque ya tiene ventas registradas."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+            return Response({"error": "No puedes eliminar este producto porque ya tiene ventas registradas."}, status=status.HTTP_400_BAD_REQUEST)
+
+
 # =========================================================
-# 4. CRUD DE MOVIMIENTOS FINANCIEROS (Gastos / Ingresos Extra)
+# 4. GASTOS Y MOVIMIENTOS
 # =========================================================
 
 class MovimientoListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # Filtramos por fecha si queremos, pero por ahora devolvemos todo lo del usuario
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        # 1. Obtener todo
         movimientos = MovimientoFinanciero.objects.filter(usuario=request.user).order_by('-fecha')
+
+        # 2. Filtrar usando la función helper
+        movimientos = filtrar_por_fechas(movimientos, start_date, end_date)
+
         serializer = MovimientoFinancieroSerializer(movimientos, many=True)
         return Response(serializer.data)
 
@@ -203,22 +233,13 @@ class MovimientoDetailView(APIView):
 
 
 # =========================================================
-# 5. PROCESAR VENTA (La Lógica Maestra)
+# 5. VENTAS (POS)
 # =========================================================
 
 class ProcesarVentaView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        # Datos esperados:
-        # {
-        #   "metodo_pago": "EFECTIVO",
-        #   "productos": [
-        #       {"id": 1, "cantidad": 2},
-        #       {"id": 5, "cantidad": 1}
-        #   ]
-        # }
-        
         datos = request.data
         productos_solicitados = datos.get('productos', [])
         metodo_pago = datos.get('metodo_pago', 'EFECTIVO')
@@ -226,30 +247,22 @@ class ProcesarVentaView(APIView):
         if not productos_solicitados:
             return Response({"error": "La venta debe tener al menos un producto"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Usamos transaction.atomic para asegurar que si algo falla, no se guarde nada a medias
         with transaction.atomic():
-            # 1. Crear la Venta (Cabecera)
             nueva_venta = Venta.objects.create(
                 usuario=request.user,
-                total=0, # Lo calcularemos ahorita
+                total=0,
                 metodo_pago=metodo_pago
             )
-
             total_acumulado = 0
 
-            # 2. Recorrer cada producto solicitado
             for item in productos_solicitados:
                 producto_id = item.get('id')
                 cantidad = item.get('cantidad')
-
-                # Buscar producto y validar que sea de ESTE usuario
                 producto = get_object_or_404(Producto, pk=producto_id, usuario=request.user)
                 
-                # Calcular precio al momento de la venta
                 precio_final = producto.precio_venta
                 subtotal = precio_final * cantidad
                 
-                # Crear el detalle
                 DetalleVenta.objects.create(
                     venta=nueva_venta,
                     producto=producto,
@@ -257,14 +270,11 @@ class ProcesarVentaView(APIView):
                     precio_unitario=precio_final,
                     subtotal=subtotal
                 )
-
                 total_acumulado += subtotal
 
-            # 3. Actualizar el total final de la venta
             nueva_venta.total = total_acumulado
             nueva_venta.save()
 
-            # Devolvemos la venta completa con sus detalles
             serializer = VentaSerializer(nueva_venta)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -272,7 +282,13 @@ class HistorialVentasView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # Traer todas las ventas del usuario ordenadas por fecha (la más reciente primero)
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
         ventas = Venta.objects.filter(usuario=request.user).order_by('-fecha')
+
+        # USAR LA FUNCIÓN HELPER (CORRECCIÓN)
+        ventas = filtrar_por_fechas(ventas, start_date, end_date)
+
         serializer = VentaSerializer(ventas, many=True)
         return Response(serializer.data)
